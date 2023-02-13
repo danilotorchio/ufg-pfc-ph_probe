@@ -1,52 +1,59 @@
-#include <Arduino.h>
 #include <heltec.h>
 
-#include "tasks.h"
-#include "helpers.h"
+#include "driver/adc.h"
+#include "nvs_flash.h"
 
 #define LORA_BAND 915E6        // 915 MHz
-#define TIME_TO_SLEEP 15       // 15 Seconds
+#define TIME_TO_SLEEP 5        // 15 Seconds
 #define uS_TO_S_FACTOR 1000000 // uS to S factor conversion
-
-// General functions declarations
-void print_wakeup_reason();
-void setupLoRa();
-
-// Tasks handler
-TaskHandle_t TasksHandler = NULL;
+#define PROBE_GPIO GPIO_NUM_4  // GPIO4 - ADC2_0
 
 // Control variables
 bool jobDone = false;
 float phValue = 0.0;
 
+// General functions declaration
+void print_wakeup_reason();
+void setup_storage();
+void setup_loRa();
+
+// Tasks declaration
+void task_read_probe(void *pvParams);
+void task_send_data(void *pvParams);
+
 void setup()
 {
     // Initialize UART and LoRa
     Heltec.begin(false, true, true, true, LORA_BAND);
+    delay(20);
+
+    // Prints the wakeup source
     print_wakeup_reason();
 
     // Setup the timer as wake up source
     esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
-    delay(10);
+    delay(20);
 
     // Initialize peripherals
-    setupLoRa();
+    adc2_config_channel_atten(ADC2_CHANNEL_0, ADC_ATTEN_DB_11);
+    // setup_storage();
+    setup_loRa();
 
     // Initialize control variables
     jobDone = false;
     phValue = 0.0;
 
-    // Create tasks
-    xTaskCreate(TaskReadProbe, "TaskReadProbe", 2048, NULL, 2, &TasksHandler);
-    xTaskCreate(TaskSendData, "TaskSendData", 2048, NULL, 2, &TasksHandler);
-
-    Serial.println("All settings done!");
+    // Initial tasks
+    delay(20);
+    xTaskCreate(task_read_probe, "task_read_probe", 2048, NULL, 3, NULL);
 }
 
 void loop()
 {
     while (1)
     {
+        Serial.printf("Job done: %d \n", jobDone);
+
         if (jobDone)
         {
             Serial.println("Entering on sleep mode...");
@@ -59,7 +66,7 @@ void loop()
             esp_deep_sleep_start();
         }
 
-        delay(1000);
+        vTaskDelay(500 / portTICK_PERIOD_MS);
     }
 }
 
@@ -92,7 +99,22 @@ void print_wakeup_reason()
     }
 }
 
-void setupLoRa()
+void setup_storage()
+{
+    esp_err_t ret;
+
+    ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
+    // Load configuration here
+}
+
+void setup_loRa()
 {
     Serial.println("Setting LoRa...");
 
@@ -108,31 +130,44 @@ void setupLoRa()
 /*************************/
 
 /*** Tasks implementations ***/
-void TaskReadProbe(void *pvParams)
+void task_read_probe(void *pvParams)
 {
     (void)pvParams;
 
-    // seeds the generator
-    srand(time(0));
-    phValue = randomFloat(0, 14);
+    int value = 0;
 
-    Serial.println("Reading pH probe...");
+    float avg = 0.0;
+    float voltage = 0.0;
+
+    for (int i = 0; i < 10; i++)
+    {
+        adc2_get_raw(ADC2_CHANNEL_0, ADC_WIDTH_12Bit, &value);
+
+        avg += value;
+        value = 0;
+
+        vTaskDelay(50 / portTICK_PERIOD_MS);
+    }
+
+    voltage = (avg / 10) * (3.3 / 4095);
+    phValue = (-8.29 * voltage) + 21.16;
+
     vTaskDelay(5000 / portTICK_PERIOD_MS);
-    xTaskNotifyGive(TasksHandler);
+    xTaskCreate(task_send_data, "task_send_data", 4096, NULL, 2, NULL);
 
-    delay(100);
+    vTaskDelay(10 / portTICK_PERIOD_MS);
     vTaskDelete(NULL);
 }
 
-void TaskSendData(void *pvParams)
+void task_send_data(void *pvParams)
 {
-    (void)pvParams;
-    ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
+    char payload[10];
+    sprintf(payload, "%.2f;%.1f", phValue, 25.0);
 
-    Serial.printf("Sending pH value: %f\n", phValue);
+    Serial.printf("Sending pH value: %s\n", payload);
 
     LoRa.beginPacket();
-    LoRa.print(phValue);
+    LoRa.print(payload);
     LoRa.endPacket();
 
     Serial.println("Sending done!");
@@ -140,4 +175,3 @@ void TaskSendData(void *pvParams)
     jobDone = true;
     vTaskDelete(NULL);
 }
-/*****************************/
