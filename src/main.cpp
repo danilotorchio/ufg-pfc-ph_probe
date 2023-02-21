@@ -8,33 +8,34 @@
 #define uS_TO_S_FACTOR 1000000 // uS to S factor conversion
 #define PROBE_GPIO GPIO_NUM_4  // GPIO4 - ADC2_0
 
-// Control variables
+// Variáveis de controle
 bool jobDone = false;
 float phValue = 0.0;
 
-// General functions declaration
+// Declaração das funções
 void print_wakeup_reason();
 void setup_storage();
 void setup_loRa();
 
-// Tasks declaration
+// Declaração das tarefas do FreeRTOS
 void task_read_probe(void *pvParams);
 void task_send_data(void *pvParams);
 
+// Método chamado na inicialização do programa no microcontrolador
 void setup()
 {
-    // Initialize UART and LoRa
+    // Display = false |  LoRa = true | Serial = true
     Heltec.begin(false, true, true, true, LORA_BAND);
     delay(20);
 
-    // Prints the wakeup source
+    // Escreve a fonte do despertador
     print_wakeup_reason();
 
-    // Setup the timer as wake up source
+    // Configura o timer como fonte do despertador
     esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
     delay(20);
 
-    // Initialize peripherals
+    // Inicializa o conversor A/D no canal 0
     adc2_config_channel_atten(ADC2_CHANNEL_0, ADC_ATTEN_DB_11);
     // setup_storage();
     setup_loRa();
@@ -48,6 +49,7 @@ void setup()
     xTaskCreate(task_read_probe, "task_read_probe", 2048, NULL, 3, NULL);
 }
 
+// Método chamado após a inicialização do programa no microcontrolador
 void loop()
 {
     while (1)
@@ -70,7 +72,7 @@ void loop()
     }
 }
 
-/*** General Functions ***/
+/*** Implementação das funções ***/
 void print_wakeup_reason()
 {
     esp_sleep_wakeup_cause_t wakeup_reason;
@@ -129,7 +131,7 @@ void setup_loRa()
 }
 /*************************/
 
-/*** Tasks implementations ***/
+/*** Implementação das tarefas do FreeRTOS ***/
 void task_read_probe(void *pvParams)
 {
     (void)pvParams;
@@ -139,7 +141,7 @@ void task_read_probe(void *pvParams)
     float avg = 0.0;
     float voltage = 0.0;
 
-    for (int i = 0; i < 10; i++)
+    for (int i = 0; i < 20; i++)
     {
         adc2_get_raw(ADC2_CHANNEL_0, ADC_WIDTH_12Bit, &value);
 
@@ -175,3 +177,4 @@ void task_send_data(void *pvParams)
     jobDone = true;
     vTaskDelete(NULL);
 }
+/*************************/
